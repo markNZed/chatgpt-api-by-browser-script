@@ -1,52 +1,68 @@
 // ==UserScript==
-// @name         ChatGPT API By Browser Script
+// @name         Unified Azure and ChatGPT API Browser Script
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      4.0
+// @match        https://oai.azure.com/*
 // @match        https://chatgpt.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=openai.com
 // @grant        none
 // @license      MIT
 // ==/UserScript==
 
-(() => {
+(function () {
   'use strict';
 
-  // Configuration Constants
-  const CONFIG = {
-      WS_URL: 'ws://localhost:8765',
-      SELECTORS: {
-          promptTextarea: '#prompt-textarea',
-          sendButton: 'button[data-testid="send-button"]',
-          stopButton: 'button.bg-black .icon-lg',
-          newChatButton: 'a[data-discover="true"]',
-          main: 'main',
-          agentTurn: 'div.agent-turn',
-          assistantMessage: 'div[data-message-author-role="assistant"]',
+  // Configuration per site
+  const CONFIGS = {
+      'https://oai.azure.com/': {
+          name: 'Azure',
+          selectors: {
+              promptTextarea: '[aria-label="User message"]',
+              sendButton: 'button[data-automation-id="chatControlButton"][aria-label="Send"]',
+              stopButton: 'button[data-automation-id="chatControlButton"][aria-label="Stop"]',
+              newChatButton: '[data-bi-cn="cg_chatsession_clear-chat"]',
+              confirmClearChatButton: '[data-bi-cn="cg_clearchatconfirmationdialog_clear"]',
+              main: '#chatGptChatRegion',
+              assistantMessage: '[data-automation-id="aiBubbleContent"] p',
+              startButton: 'button[data-automation-id="chatControlButton"][aria-label="Send"]',
+          },
+          logPrefix: 'Azure-API-Script',
       },
-      INTERVALS: {
-          sleep: 500,
-          debounce: 1000,
-          reconnectInitial: 2000,
-          reconnectMax: 30000,
-          heartbeat: 30000,
+      'https://chatgpt.com/': {
+          name: 'ChatGPT',
+          selectors: {
+              promptTextarea: '#prompt-textarea',
+              sendButton: 'button[data-testid="send-button"]',
+              stopButton: 'button.bg-black .icon-lg',
+              newChatButton: 'a[data-discover="true"]',
+              confirmClearChatButton: null, // Not applicable or needs to be defined
+              main: 'main',
+              assistantMessage: 'div[data-message-author-role="assistant"]',
+              startButton: 'button[data-testid="send-button"]',
+          },
+          logPrefix: 'ChatGPT-API-Script',
       },
-      TIMEOUTS: {
-          waitForElement: 10000,
-          waitFor: 5000,
-      },
-      LOG_PREFIX: 'chatgpt-api-by-browser-script',
   };
+
+  // Determine current site configuration
+  const currentSite = Object.keys(CONFIGS).find(site => window.location.href.startsWith(site));
+  if (!currentSite) {
+      console.error('Unified Script: Unsupported site. This script only supports Azure and ChatGPT.');
+      return;
+  }
+
+  const CONFIG = CONFIGS[currentSite];
 
   // Utility Functions
   const log = (...args) => {
       const timestamp = new Date().toLocaleTimeString();
-      console.log(`${timestamp} ${CONFIG.LOG_PREFIX}`, ...args);
+      console.log(`${timestamp} ${CONFIG.logPrefix}`, ...args);
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const waitForElement = async (selector, timeout = CONFIG.TIMEOUTS.waitForElement) => {
-      const interval = CONFIG.INTERVALS.sleep;
+  const waitForElement = async (selector, timeout = 10000) => {
+      const interval = 500;
       let elapsed = 0;
       while (elapsed < timeout) {
           const element = document.querySelector(selector);
@@ -59,8 +75,9 @@
   };
 
   // Main Application Class
-  class ChatGPTBrowserScript {
-      constructor() {
+  class UnifiedBrowserScript {
+      constructor(config) {
+          this.config = config;
           this.socket = null;
           this.observer = null;
           this.stop = false;
@@ -68,16 +85,17 @@
           this.lastText = null;
           this.currentRequestId = null;
           this.debounceTimer = null;
-          this.reconnectInterval = CONFIG.INTERVALS.reconnectInitial;
+          this.reconnectInterval = 2000; // Initial reconnect interval
+          this.maxReconnectInterval = 30000; // Max reconnect interval
       }
 
       // Initialize the script on window load
       init() {
           window.addEventListener('load', () => {
-              log('Initializing ChatGPT Browser Script');
+              log('Initializing Unified Browser Script');
               this.setupStatusUI();
               this.connectWebSocket();
-              setInterval(() => this.sendHeartbeat(), CONFIG.INTERVALS.heartbeat);
+              setInterval(() => this.sendHeartbeat(), 30000);
           });
       }
 
@@ -95,6 +113,7 @@
               fontFamily: 'Arial, sans-serif',
               fontSize: '14px',
           });
+          this.statusDOM.innerHTML = `<span style="color: black;">API Connecting...</span>`;
           document.body.appendChild(this.statusDOM);
       }
 
@@ -107,13 +126,13 @@
 
       // Establish WebSocket connection
       connectWebSocket() {
-          log('Connecting to WebSocket at', CONFIG.WS_URL);
-          this.socket = new WebSocket(CONFIG.WS_URL);
+          log('Connecting to WebSocket at', WS_URL);
+          this.socket = new WebSocket(WS_URL);
 
           this.socket.onopen = () => {
               log('WebSocket connection established');
-              this.updateStatus('API', 'green');
-              this.reconnectInterval = CONFIG.INTERVALS.reconnectInitial;
+              this.updateStatus('API!', 'green');
+              this.reconnectInterval = 2000; // Reset reconnect interval
           };
 
           this.socket.onclose = () => {
@@ -132,7 +151,7 @@
               try {
                   const data = JSON.parse(event.data);
                   this.currentRequestId = data.id;
-                  this.handleIncomingData(data);
+                  this.start(data);
               } catch (error) {
                   log('Failed to parse WebSocket message:', error);
               }
@@ -144,7 +163,7 @@
           log(`Reconnecting in ${this.reconnectInterval}ms`);
           setTimeout(() => {
               this.connectWebSocket();
-              this.reconnectInterval = Math.min(this.reconnectInterval * 2, CONFIG.INTERVALS.reconnectMax);
+              this.reconnectInterval = Math.min(this.reconnectInterval * 2, this.maxReconnectInterval);
           }, this.reconnectInterval);
       }
 
@@ -158,64 +177,74 @@
           }
       }
 
-      // Handle incoming data from WebSocket
-      async handleIncomingData(data) {
-          log('Processing incoming data:', data);
-          await this.processData(data);
-      }
-
-      // Process and send data to ChatGPT interface
-      async processData(data) {
+      // Start processing incoming data
+      async start(data) {
+          log('Start method called with data:', data);
           const startTime = Date.now();
+
+          // Parse the incoming data
+          let parsedData;
           try {
-              const parsedData = JSON.parse(data.text);
+              parsedData = JSON.parse(data.text);
               log('Parsed data:', parsedData);
-
-              const { messages, newChat } = parsedData;
-
-              if (!Array.isArray(messages) || messages.length === 0) {
-                  log('Invalid or empty messages array');
-                  return;
-              }
-
-              const lastMessage = messages[messages.length - 1];
-              if (!lastMessage?.content) {
-                  log('No valid content in the last message');
-                  return;
-              }
-
-              const messageContent = lastMessage.content;
-              log('Message to send:', messageContent);
-
-              if (newChat) {
-                  await this.initNewChat();
-              }
-
-              const promptTextarea = await waitForElement(CONFIG.SELECTORS.promptTextarea);
-              await sleep(CONFIG.INTERVALS.debounce * 2);
-              if (promptTextarea) {
-                  this.insertText(promptTextarea, messageContent);
-                  const sendButton = await this.waitFor(CONFIG.SELECTORS.sendButton, true);
-                  if (sendButton) {
-                      sendButton.click();
-                      log('Clicked send button');
-                      await this.waitFor(CONFIG.SELECTORS.stopButton);
-                  } else {
-                      log('Send button not enabled');
-                  }
-              } else {
-                  log('Prompt textarea not found');
-              }
-
-              this.observeMutations();
-              log(`processData() completed in ${Date.now() - startTime}ms`);
           } catch (error) {
-              log('Error in processData method:', error);
+              log('Error parsing data:', error);
+              return;
           }
+
+          const { messages, model, newChat } = parsedData;
+
+          this.stop = false;
+          log('Starting to send a new message');
+
+          // Validate messages array
+          if (!Array.isArray(messages) || messages.length === 0) {
+              log('Error: Messages array is empty or invalid');
+              return;
+          }
+
+          // Extract the last user message to send
+          const lastMessage = messages[messages.length - 1];
+          if (!lastMessage || !lastMessage.content) {
+              log('Error: No valid message content found in the last message');
+              return;
+          }
+
+          const messageContent = lastMessage.content;
+          log('Message content to send:', messageContent);
+
+          // Handle newChat flag
+          if (newChat) {
+              log('New chat flag detected, initiating new conversation.');
+              await this.clickNewChatButton();
+              log('New conversation initiated.');
+              await sleep(500);
+          }
+
+          // Inject the message into the interface
+          const promptTextarea = await waitForElement(this.config.selectors.promptTextarea, 10000);
+          if (promptTextarea) {
+              log('Prompt textarea found, inserting message content');
+              await this.insertText(promptTextarea, messageContent);
+              const sendButton = await this.waitForButton(this.config.selectors.sendButton, true, 5000);
+              if (sendButton) {
+                  sendButton.click();
+                  log('Send button clicked');
+              } else {
+                  log('Error: Send button is still disabled after waiting');
+              }
+              await this.waitForButton(this.config.selectors.stopButton, false, 10000);
+          } else {
+              log('Error: Prompt textarea not found');
+          }
+
+          this.observeMutations();
+
+          log(`Start method completed in ${Date.now() - startTime}ms`);
       }
 
-      // Insert text into a contenteditable element and dispatch necessary events
-     async insertText(element, text) {
+      // Insert text into the textarea/input
+      async insertText(element, text) {
           try {
               // Focus the editor to ensure it can receive the paste event
               element.focus();
@@ -240,121 +269,155 @@
 
               log(`Simulated paste of "${text}" into the editor.`);
           } catch (error) {
-              log('Error during simulatePaste:', error);
+              log('Error during insertText:', error);
           }
       }
 
-      // Wait for a selector to appear and optionally become enabled
-      async waitFor(selector, shouldBeEnabled = false, timeout = CONFIG.TIMEOUTS.waitFor) {
-          const interval = CONFIG.INTERVALS.sleep;
-          let elapsed = 0;
-          while (elapsed < timeout) {
+      // Wait for a button to appear and optionally become enabled
+      async waitForButton(selector, shouldBeEnabled = false, timeout = 5000) {
+          const intervalTime = 500; // Check every 500ms
+          let elapsedTime = 0;
+          while (elapsedTime < timeout) {
               const button = document.querySelector(selector);
               if (button) {
                   if (shouldBeEnabled) {
-                      if (!button.disabled) {
-                          log(`Button "${selector}" is enabled`);
+                      if (!button.disabled && !button.classList.contains('disabled')) {
+                          log('Button found and enabled:', selector);
                           return button;
                       } else {
-                          log(`Button "${selector}" is disabled, waiting...`);
+                          log('Button is disabled, waiting...', selector);
                       }
                   } else {
-                      log(`Button "${selector}" found`);
+                      log('Button found:', selector);
                       return button;
                   }
               } else {
-                  log(`Button "${selector}" not found, waiting...`);
+                  log('Button is missing, waiting...', selector);
               }
-              await sleep(interval);
-              elapsed += interval;
+              await sleep(intervalTime);
+              elapsedTime += intervalTime;
           }
-          log(`Timeout: Button "${selector}" not available after ${timeout}ms`);
+          log('Button did not become available within the timeout period:', selector);
           return null;
       }
 
-      // Initialize a new chat session
-      async initNewChat() {
-          const newChatButton = await waitForElement(CONFIG.SELECTORS.newChatButton);
+      // Click the "New Chat" button and confirm if necessary
+      async clickNewChatButton() {
+          const newChatButtonSelector = this.config.selectors.newChatButton;
+          if (!newChatButtonSelector) {
+              log('No newChatButton selector defined for this site.');
+              return;
+          }
+
+          const newChatButton = await this.waitForButton(newChatButtonSelector, false, 5000);
           if (newChatButton) {
               newChatButton.click();
-              log('Clicked New Chat button');
-              const promptTextarea = await waitForElement(CONFIG.SELECTORS.promptTextarea);
-              if (promptTextarea) {
-                  log('New chat initiated, prompt textarea available');
-              } else {
-                  log('Prompt textarea not found after initiating new chat');
-              }
+              log('New Chat button clicked');
           } else {
-              log('New Chat button not found');
+              log('Error: Unable to find New Chat button');
+              return;
+          }
+
+          // If there's a confirmation button, click it
+          if (this.config.selectors.confirmClearChatButton) {
+              const confirmButton = await this.waitForButton(this.config.selectors.confirmClearChatButton, false, 5000);
+              if (confirmButton) {
+                  confirmButton.click();
+                  log('Confirm Clear Chat button clicked');
+              } else {
+                  log('Error: Unable to find Confirm Clear Chat button');
+              }
           }
       }
 
       // Setup MutationObserver to monitor DOM changes
       observeMutations() {
-          if (this.observer) {
-              log('MutationObserver already active');
-              return;
-          }
+          log('Setting up MutationObserver');
 
-          const mainElement = document.querySelector(CONFIG.SELECTORS.main);
+          const mainElement = document.querySelector(this.config.selectors.main);
           if (!mainElement) {
-              log('<main> element not found, cannot observe mutations');
+              log('Error: Main element not found, cannot observe mutations');
               return;
           }
 
-          this.stop = false;
+          if (this.observer) {
+              log('MutationObserver is already active');
+              return;
+          }
 
-          this.observer = new MutationObserver(mutations => this.handleMutations(mutations, mainElement));
-          this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-          log('MutationObserver set up');
-      }
+          this.observer = new MutationObserver(async (mutations) => {
+              log('DOM mutations detected:', mutations);
 
-      // Handle DOM mutations detected by MutationObserver
-      async handleMutations(mutations, mainElement) {
-          log('DOM mutations detected');
-          const relevantMutations = mutations.filter(mutation => mainElement.contains(mutation.target));
+              // Filter mutations within the main element
+              const relevantMutations = mutations.filter(mutation => {
+                  return mainElement.contains(mutation.target);
+              });
 
-          if (!relevantMutations.length) return;
+              if (relevantMutations.length === 0) return;
 
-          if (this.debounceTimer) clearTimeout(this.debounceTimer);
-
-          this.debounceTimer = setTimeout(async () => {
-              const agentTurns = document.querySelectorAll(CONFIG.SELECTORS.agentTurn);
-              const lastAgentTurn = agentTurns[agentTurns.length - 1];
-              const assistantMessage = lastAgentTurn?.querySelector(CONFIG.SELECTORS.assistantMessage);
-              const lastText = assistantMessage?.textContent || '';
-
-              const startButton = document.querySelector(CONFIG.SELECTORS.sendButton);
-
-              if ((!lastText || lastText === this.lastText) && !startButton) {
-                  log('No new or changed assistant message');
-                  return;
+              // Debounce to avoid rapid consecutive triggers
+              if (this.debounceTimer) {
+                  clearTimeout(this.debounceTimer);
               }
 
-              this.lastText = lastText;
-              log('Sending answer to server:', lastText);
-
-              if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-                  this.socket.send(JSON.stringify({ type: 'answer', text: lastText }));
-              } else {
-                  log('Cannot send answer, WebSocket not open');
-              }
-
-              if (startButton) {
-                  log('Start button detected, disconnecting observer');
-                  if (!this.stop) {
-                      this.stop = true;
-                      this.socket.send(JSON.stringify({ type: 'stop' }));
-                      log('Sent stop signal to server');
+              this.debounceTimer = setTimeout(async () => {
+                  const assistantMessageElement = document.querySelector(this.config.selectors.assistantMessage);
+                  if (!assistantMessageElement) {
+                      log('Error: Assistant message element not found');
+                      return;
                   }
-                  this.observer.disconnect();
-                  this.observer = null;
-              }
-          }, CONFIG.INTERVALS.debounce);
+
+                  const lastText = assistantMessageElement.textContent.trim();
+
+                  const startButton = document.querySelector(this.config.selectors.startButton);
+
+                  if ((!lastText || lastText === this.lastText) && !startButton) {
+                      log('Error: Last message text not found or unchanged');
+                      return;
+                  }
+
+                  this.lastText = lastText;
+                  log('Sending answer back to server:', lastText);
+                  if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+                      this.socket.send(JSON.stringify({
+                          type: 'answer',
+                          text: lastText,
+                      }));
+                  } else {
+                      log('Cannot send answer, WebSocket not open');
+                  }
+
+                  if (startButton) {
+                      log('Start button found, disconnecting observer');
+                      this.observer.disconnect();
+                      this.observer = null;
+
+                      if (!this.stop) {
+                          this.stop = true;
+                          this.socket.send(JSON.stringify({
+                              type: 'stop',
+                          }));
+                          log('Sent stop signal to server');
+                      }
+                  }
+              }, 1000); // 1 second debounce
+          });
+
+          const observerConfig = {
+              childList: true,
+              subtree: true,
+              characterData: true,
+          };
+          this.observer.observe(document.body, observerConfig);
+          log('MutationObserver is now observing');
       }
   }
 
-  // Initialize the application
-  new ChatGPTBrowserScript().init();
+  // WebSocket URL (can be parameterized if needed)
+  const WS_URL = `ws://localhost:8765`;
+
+  // Initialize the app with current site configuration
+  const app = new UnifiedBrowserScript(CONFIG);
+  app.init();
 
 })();
