@@ -1,0 +1,11 @@
+This is working 26/09/2024
+I used Firefox 
+	ViolentMonkey for userscaripts
+  		simple-modify-headers 
+			Delete Content-Security-Policy Response
+		created userscript from tampermonkey-script.js
+Created script hello-world.js
+	node hello-world.js
+Should investigate running server from docker - more secure
+
+Modified requestPayload to just pass the instruction

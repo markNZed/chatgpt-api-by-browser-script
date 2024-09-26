@@ -24,7 +24,7 @@ class WebSocketServer {
       });
     });
 
-    console.log('WebSocket server is running');
+    console.log('WebSocket server is running on port', WS_PORT);
   }
 
   async sendRequest(request, callback) {
@@ -36,7 +36,7 @@ class WebSocketServer {
 
     this.connectedSocket.send(JSON.stringify(request));
 
-    let text = ''
+    let text = '';
     const handleMessage = (message) => {
       const data = message;
       const jsonString = data.toString('utf8');
@@ -46,8 +46,8 @@ class WebSocketServer {
         this.connectedSocket.off('message', handleMessage);
         callback('stop', text);
       } else if (jsonObject.type === 'answer')  {
-        console.log('answer:', jsonObject.text)
-        text = jsonObject.text
+        console.log('answer:', jsonObject.text);
+        text = jsonObject.text;
         callback('answer', text);
       }
     };
@@ -64,8 +64,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cors());
 
 app.post('/v1/chat/completions', async function (req, res) {
-
-  const { messages, model, stream, newChat = true  } = req.body;
+  const { messages, model, stream, newChat = true } = req.body;
 
   if(stream){
     res.setHeader('Content-Type', 'text/event-stream');
@@ -74,26 +73,26 @@ app.post('/v1/chat/completions', async function (req, res) {
     res.flushHeaders();
   }
 
-  console.log('request body', req.body)
+  console.log('request body', req.body);
 
-  const requestPayload = `
-    Now you must play the role of system and answer the user.
+  // Directly stringify the messages
+  const requestPayload = JSON.stringify({
+    messages,
+    model,
+    newChat,
+  });
 
-    ${JSON.stringify(messages)}
-
-    Your answer:
-  `;
-
+  console.log("messages", messages);
   let lastResponse = '';
   webSocketServer.sendRequest(
     {
-      text: requestPayload,
+      text: requestPayload, // Directly send the JSON string
       model: model,
       newChat,
     },
     (type, response) => {
       try {
-        response = response.trim()
+        response = response.trim();
         let deltaContent = '';
         if (lastResponse) {
           const index = response.indexOf(lastResponse);
@@ -103,11 +102,11 @@ app.post('/v1/chat/completions', async function (req, res) {
         }
         const result = {
           choices: [{
-              message: { content: response },
-              delta: { content: deltaContent }
+            message: { content: response },
+            delta: { content: deltaContent }
           }]
-        }
-        lastResponse = response
+        };
+        lastResponse = response;
         if(type === 'stop'){
           if(stream) {
             res.write(`id: ${Date.now()}\n`);
@@ -124,14 +123,14 @@ app.post('/v1/chat/completions', async function (req, res) {
             res.write(`data: ${JSON.stringify(result)}\n\n`);
           }
         }
-        console.log('result', result)
+        console.log('result', result);
       } catch (error) {
-        console.log('error', error)
+        console.log('error', error);
       }
     }
   );
 });
 
 app.listen(HTTP_PORT, function () {
-  console.log(`Application example, access address is http://localhost:${HTTP_PORT}/v1/chat/completions`);
+  console.log(`Application is running. Access it at http://localhost:${HTTP_PORT}/v1/chat/completions`);
 });
